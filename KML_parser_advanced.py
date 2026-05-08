@@ -7,9 +7,15 @@ import sys
 import tempfile
 import time
 import zipfile
+import xml.etree.ElementTree as ET
+
+# Precompiled regex for stripping HTML tags (used in clean_html)
+_tag_re = re.compile(r"<.*?>", flags=re.DOTALL)
 
 
-def print_progress_bar(iteration, total, prefix='', suffix='', decimals=1, length=50, fill='█', print_end="\r"):
+
+def print_progress_bar(iteration, total, prefix='', suffix='', decimals=1, length=50, fill='█', print_end="\r",
+                       color=None):
     """
     Call in a loop to create terminal progress bar
     @params:
@@ -21,22 +27,49 @@ def print_progress_bar(iteration, total, prefix='', suffix='', decimals=1, lengt
         length      - Optional  : character length of bar (Int)
         fill        - Optional  : bar fill character (Str)
         print_end   - Optional  : end character (e.g. "\r", "\r\n") (Str)
+        color       - Optional  : color code ('yellow', 'green', 'cyan', etc.)
     """
+    # ANSI color codes
+    colors = {
+        'yellow': '\033[93m',
+        'green': '\033[92m',
+        'cyan': '\033[96m',
+        'blue': '\033[94m',
+        'reset': '\033[0m'
+    }
+
+    color_code = colors.get(color, 'green')
+    reset_code = colors['reset'] if color else ''
+
     percent = ("{0:." + str(decimals) + "f}").format(100 * (iteration / float(total)))
     filled_length = int(length * iteration // total)
     bar = fill * filled_length + '-' * (length - filled_length)
-    print(f'\r{prefix} |{bar}| {percent}% {suffix}', end=print_end)
+    print(f'\r{color_code}{prefix} |{bar}| {percent}% {suffix}{reset_code}', end=print_end)
     if iteration == total:
         print()
 
 
-def extract_kml_from_kmz(kmz_path, temp_dir):
-    """Extract KMZ and return path to first KML file."""
-    zip_path = os.path.join(temp_dir, "temp.zip")
-    shutil.copy(kmz_path, zip_path)
+def format_duration(seconds):
+    """Format seconds as minutes and seconds if >= 60, otherwise show seconds with two decimals."""
+    if seconds >= 60:
+        mins = int(seconds // 60)
+        secs = seconds % 60
+        return f"{mins} minutes {secs:.2f} seconds"
+    else:
+        return f"{seconds:.2f} seconds"
 
-    with zipfile.ZipFile(zip_path, "r") as z:
+
+def extract_kml_from_kmz(kmz_path, temp_dir, show_progress=True):
+    """Extract KMZ and return path to first KML file."""
+    with zipfile.ZipFile(kmz_path, "r") as z:
+        members = z.namelist()
+        # Fast extraction: extract all at once
         z.extractall(temp_dir)
+        if show_progress:
+            total_files = len(members)
+            # Single progress update (fast)
+            print_progress_bar(total_files, total_files, prefix='Extracting KMZ:', suffix='Complete', length=40,
+                               color='yellow')
 
     for root, _, files in os.walk(temp_dir):
         for f in files:
@@ -47,47 +80,65 @@ def extract_kml_from_kmz(kmz_path, temp_dir):
 
 def clean_html(text):
     """Remove HTML tags and decode HTML entities."""
+    if not text:
+        return ''
     text = html.unescape(text)
-    text = re.sub(r"<.*?>", "", text)
+    # Use precompiled regex for speed
+    text = _tag_re.sub('', text)
     return text.strip()
 
 
-def parse_balloon_styles(kml_text, show_progress=True):
+def parse_balloon_styles(kml_path, show_progress=True):
     """
-    Extract all <Style id="..."><BalloonStyle>...</BalloonStyle></Style>
-    and return list of dicts with StyleID, H3, Lines.
+    Stream-parse the KML file and extract all <Style id="..."> elements that contain
+    a <BalloonStyle><text><![CDATA[...]]></text></BalloonStyle>. This uses ElementTree.iterparse
+    to avoid loading the entire file into memory.
+    Returns (styles_list, max_lines).
     """
     styles = []
-
-    # Find all Style blocks with BalloonStyle CDATA
-    style_blocks = re.findall(
-        r'<Style\s+id\s*=\s*"([^"]+)".*?<BalloonStyle>.*?<text>\s*<!\[CDATA\[(.*?)\]\]>\s*</text>',
-        kml_text,
-        flags=re.DOTALL | re.IGNORECASE,
-    )
-
     max_lines = 0
-    total_styles = len(style_blocks)
 
-    for i, (style_id, cdata) in enumerate(style_blocks):
-        if show_progress and (i + 1) % 10 == 0 or i + 1 == total_styles:
-            print_progress_bar(i + 1, total_styles, prefix='Parsing balloon styles:', suffix='Complete', length=40)
+    try:
+        # iterparse handles namespaces; use local name extraction
+        for event, elem in ET.iterparse(kml_path, events=("end",)):
+            local = elem.tag.split('}')[-1] if '}' in elem.tag else elem.tag
+            if local == 'Style':
+                style_id = elem.get('id')
+                # Find BalloonStyle/text inside this Style
+                cdata_text = None
+                for child in elem:
+                    if (child.tag.split('}')[-1] if '}' in child.tag else child.tag) == 'BalloonStyle':
+                        for sub in child:
+                            if (sub.tag.split('}')[-1] if '}' in sub.tag else sub.tag) == 'text':
+                                # text may include CDATA/HTML
+                                cdata_text = ''.join(sub.itertext()) or ''
+                                break
+                        break
 
-        # Extract <h3>
-        h3_match = re.search(r"<h3>(.*?)</h3>", cdata, flags=re.IGNORECASE | re.DOTALL)
-        h3_value = clean_html(h3_match.group(1)) if h3_match else None
+                if cdata_text is not None:
+                    # Extract <h3>
+                    h3_match = re.search(r"<h3>(.*?)</h3>", cdata_text, flags=re.IGNORECASE | re.DOTALL)
+                    h3_value = clean_html(h3_match.group(1)) if h3_match else None
 
-        # Extract all <td> values
-        td_raw = re.findall(r"<td>(.*?)</td>", cdata, flags=re.DOTALL | re.IGNORECASE)
-        lines = [clean_html(v) for v in td_raw if clean_html(v)]
+                    # Extract all <td> values
+                    td_raw = re.findall(r"<td>(.*?)</td>", cdata_text, flags=re.DOTALL | re.IGNORECASE)
+                    lines = [clean_html(v) for v in td_raw if clean_html(v)]
 
-        max_lines = max(max_lines, len(lines))
+                    max_lines = max(max_lines, len(lines))
+                    styles.append({
+                        "StyleID": style_id,
+                        "H3": h3_value,
+                        "Lines": lines
+                    })
 
-        styles.append({
-            "StyleID": style_id,
-            "H3": h3_value,
-            "Lines": lines
-        })
+                # Free memory
+                elem.clear()
+    except ET.ParseError as e:
+        # Fallback: if iterparse fails, return empty list; caller can handle
+        print(f"Warning: XML parse error during streaming parse: {e}")
+
+    if show_progress:
+        print(f"📊 Analyzed KML content ({len(styles)} balloon styles found)...")
 
     return styles, max_lines
 
@@ -101,8 +152,9 @@ def write_csv(styles, max_lines, output_csv, show_progress=True):
 
         total_styles = len(styles)
         for i, s in enumerate(styles):
-            if show_progress and ((i + 1) % 10 == 0 or i + 1 == total_styles):
-                print_progress_bar(i + 1, total_styles, prefix='Writing CSV:', suffix='Complete', length=40)
+            if show_progress:
+                print_progress_bar(i + 1, total_styles, prefix='Writing CSV:', suffix='Complete', length=40,
+                                   color='yellow')
 
             row = {
                 "StyleID": s["StyleID"],
@@ -128,55 +180,49 @@ def process_kml(kmz_or_kml, output_csv, mode='standard', show_timing=True):
     temp_dir = tempfile.mkdtemp()
     try:
         if mode in ['standard', 'debug']:
-            print("\nProcessing file...")
+            print("\n📖 Processing file...")
         start_time = time.time()
 
         if kmz_or_kml.lower().endswith(".kmz"):
             if show_progress:
-                print("Extracting KMZ file...")
+                print("📦 Extracting KMZ file...")
             kmz_start = time.time()
-            kml_path = extract_kml_from_kmz(kmz_or_kml, temp_dir)
+            kml_path = extract_kml_from_kmz(kmz_or_kml, temp_dir, show_progress=show_progress)
             if not kml_path:
                 raise FileNotFoundError("No KML file found inside KMZ.")
             if show_timing:
                 kmz_duration = time.time() - kmz_start
-                print(f"KMZ extraction completed in {kmz_duration:.2f} seconds.")
+                print(f"KMZ extraction completed in {format_duration(kmz_duration)}.")
         else:
             kml_path = kmz_or_kml
 
         if show_progress:
-            print("Reading KML file...")
-        read_start = time.time()
-        with open(kml_path, "r", encoding="utf-8") as f:
-            kml_text = f.read()
-        if show_timing:
-            read_duration = time.time() - read_start
-            print(f"KML file read in {read_duration:.2f} seconds.")
-
-        if show_progress:
-            print("Analyzing KML content...")
+            print("📖 Parsing KML file (streaming)...")
         analyze_start = time.time()
-        styles, max_lines = parse_balloon_styles(kml_text, show_progress=show_progress)
+        styles, max_lines = parse_balloon_styles(kml_path, show_progress=show_progress)
         if show_timing:
             analyze_duration = time.time() - analyze_start
-            print(f"KML content analysis completed in {analyze_duration:.2f} seconds.")
+            print(f"KML content analysis completed in {format_duration(analyze_duration)}.")
+
 
         if mode == 'debug':
             print(f"\n[DEBUG] Found {len(styles)} balloon styles")
             print(f"[DEBUG] Maximum lines per style: {max_lines}")
 
+        if show_progress:
+            print("💾 Writing CSV...")
         write_start = time.time()
         write_csv(styles, max_lines, output_csv, show_progress=show_progress)
         if show_timing:
             write_duration = time.time() - write_start
-            print(f"CSV writing completed in {write_duration:.2f} seconds.")
+            print(f"CSV writing completed in {format_duration(write_duration)}.")
 
         total_time = time.time() - start_time
         if show_timing:
-            print(f"Total processing time: {total_time:.2f} seconds.\n")
+            print(f"Total processing time: {format_duration(total_time)}\n")
 
-        print("✓ Extraction complete!")
-        print(f"✓ CSV saved to: {output_csv}")
+        print("✅ Extraction complete!")
+        print(f"💾 CSV saved to: {output_csv}")
 
         # Open the output folder
         output_dir = os.path.dirname(output_csv)
@@ -191,15 +237,15 @@ def process_kml(kmz_or_kml, output_csv, mode='standard', show_timing=True):
 
 def display_menu():
     """Display mode selection menu"""
-    print("\n" + "="*50)
+    print("\n" + "=" * 50)
     print("KML Parser - Advanced Mode Selection")
-    print("="*50)
+    print("=" * 50)
     print("Select parsing mode:")
     print("  1 - Standard (with progress bars and timing)")
     print("  2 - Quick (fast mode, minimal output)")
     print("  3 - Debug (detailed output and diagnostics)")
     print("  4 - Exit")
-    print("="*50)
+    print("=" * 50)
 
 
 def main():
@@ -221,8 +267,8 @@ def main():
         return main()
 
     mode = mode_map[mode_choice]
-    kmz_or_kml = input("\nEnter full path to your KMZ or KML file: ").strip().strip('"')
-    output_csv = input("Enter full path for output CSV (including .csv): ").strip().strip('"')
+    kmz_or_kml = input("\nPlease enter full path to your KMZ or KML file: ").strip().strip('"')
+    output_csv = input("Please enter full path for output CSV (including .csv extension): ").strip().strip('"')
 
     try:
         process_kml(kmz_or_kml, output_csv, mode=mode, show_timing=(mode != 'quick'))

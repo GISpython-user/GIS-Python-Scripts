@@ -1,22 +1,23 @@
-# FIBER Attachment & Photos Exporter (GUI)
+# ArcGIS Field Maps Attachment & Photos Exporter (GUI)
 
-A small PyQt6 GUI for extracting attachments (photos and other files) and exporting per-TL CSVs from a File Geodatabase (.gdb).
+A small PyQt6 GUI for extracting attachments (photos and other files) and exporting a .csv file from a File Geodatabase (.gdb) created in ArcGIS Field maps.
 
-This README documents the included script `FIBER_Export_Attachments_Photos_Work - New_GUI_Date.py`, how to run it, its inputs/outputs, and common troubleshooting steps.
+This README documents the included script, how to run it, its inputs/outputs, and common troubleshooting steps.
 
 ---
 
 ## Quick summary
 
-- Purpose: Search a .gdb for the best-matching feature class and attachment table (fuzzy matching), optionally run a dry run to inspect counts, then export per-TL CSVs and extract attachments into a folder hierarchy.
+- Purpose: Search a .gdb for the best-matching feature class and attachment table (fuzzy matching), optionally run a dry run to inspect counts, then export .csv file(s) and extract attachments into a folder hierarchy.
 - UI: Graphical (PyQt6) — prompts for: File Geodatabase, approx. Feature Class name, approx. Attachment Table name, Output folder, and a Dry Run checkbox.
-- Important: The script depends on ArcGIS Pro's `arcpy` module; it must be run inside an ArcGIS Pro Python environment.
+- Important: The script depends on ArcGIS Pro's `arcpy` module; it must be run inside an ArcGIS Pro Python environment or be able to import it into your IDE if you have a valid ArcGIS license.
 
 ---
+TL here is used as an identifier and the attribute fields used can be customized when you make the fielding form in ArcGIS Field maps to be anything you want. The attribute fields called for in this script are my own for an electrical utility line.
 
 ## Files
 
-- `FIBER_Export_Attachments_Photos_Work - New_GUI_Date.py` — main GUI script (included in this repository).
+ — main GUI script (included in this repository).
 
 ---
 
@@ -111,23 +112,8 @@ output/
 
 ---
 
-## Suggestions / Next steps (optional improvements)
-
-- Add a progress bar and cancel button for long extractions.
-- Make the fuzzy-match threshold configurable in the UI.
-- Allow choosing whether to open the output folder at the end.
-- Add filename sanitization for non-ASCII characters and duplicate-name handling.
-
----
-
 ## License
 
 No license file is included — treat this as project-specific script. Add a LICENSE file if you want to publish with explicit terms.
 
 ---
-
-If you'd like, I can also:
-- Add a short unit test or a small non-arcpy stub harness for offline testing of the fuzzy matching and filename logic,
-- Or add a brief `requirements.txt` specific to this script (excluding `arcpy`).
-
-Tell me which of those you'd prefer and I'll add it.

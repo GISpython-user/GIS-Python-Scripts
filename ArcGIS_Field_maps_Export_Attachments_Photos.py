@@ -15,7 +15,7 @@ from PyQt6.QtWidgets import (
 class GeodatabaseApp(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Geodatabase FIBER Attachment Extractor")
+        self.setWindowTitle("Geodatabase Attachment Extractor")
 
         # Layouts
         layout = QVBoxLayout()
@@ -152,7 +152,7 @@ class GeodatabaseApp(QWidget):
         # Step 7: Allow overwriting
         arcpy.env.overwriteOutput = True
 
-        # Step 8: Add X,Y coordinates
+        # Step 8: Add X,Y coordinates (WGS84 Lat/Long)
         try:
             with arcpy.EnvManager(
                     outputCoordinateSystem="GEOGCS['GCS_WGS_1984',DATUM['D_WGS_1984',SPHEROID['WGS_1984',6378137.0,298.257223563]],PRIMEM['Greenwich',0.0],UNIT['Degree',0.0174532925199433]]"):
@@ -163,7 +163,7 @@ class GeodatabaseApp(QWidget):
             self.close()
             return
 
-        # Step 9: Export tables by TL_Number
+        # Step 9: Export tables by TL_Number (This can be any variable you want to label the subsequent Excel file)
         tl_numbers = set()
         with arcpy.da.SearchCursor(updated_features, ["TL_Number"]) as cursor:
             for row in cursor:
@@ -178,7 +178,7 @@ class GeodatabaseApp(QWidget):
             # Build a safe folder/name for the TL
             safe_tl = "".join(c for c in tl if c.isalnum() or c in (' ', '_', '-')).rstrip()
 
-            # Attempt to get Date_Fielded from the features in this TL group and use it in the filename.
+            # Attempt to get Date_Fielded from the features and use it in the filename.
             # Fall back to the current date if no valid Date_Fielded is found.
             date_str = datetime.now().strftime("%m_%d_%Y")  # default
             try:
@@ -211,7 +211,7 @@ class GeodatabaseApp(QWidget):
 
             excel_output = os.path.join(
                 output_folder,
-                f"{safe_tl}_FIBER_Field_Survey_{date_str}.xlsx"
+                f"{safe_tl}_{date_str}.xlsx"
             )
 
             try:
@@ -223,12 +223,12 @@ class GeodatabaseApp(QWidget):
                 self.log_message(f"✅ Exported Excel table to: {excel_output}")
 
             except Exception as e:
-                self.log_message(f"⚠️ Failed to export Excel file for TL {tl}: {e}")
+                self.log_message(f"⚠️ Failed to export Excel file {tl}: {e}")
 
             finally:
                 arcpy.management.Delete(layer_name)
 
-        # Step 10: Join fields
+        # Step 10: Join fields (These are fields to join to the attachment table from the attribute fields)
         try:
             arcpy.management.JoinField(
                 in_data=attachment_table,

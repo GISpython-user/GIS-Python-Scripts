@@ -15,7 +15,7 @@ from PyQt6.QtWidgets import (
 class GeodatabaseApp(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Geodatabase Attachment Extractor")
+        self.setWindowTitle("Geodatabase FIBER Attachment Extractor")
 
         # Layouts
         layout = QVBoxLayout()
@@ -86,9 +86,9 @@ class GeodatabaseApp(QWidget):
         if not os.path.exists(output_folder):
             try:
                 os.makedirs(output_folder)
-                self.log_message(f"📁 Output folder created: {output_folder}")
+                self.log_message(f"📁 Output folder was created: {output_folder}")
             except Exception as e:
-                QMessageBox.critical(self, "Error", f"Failed to create output folder: {e}")
+                QMessageBox.critical(self, "ERROR", f"Failed to create the output folder: {e}")
                 return
 
         # List contents
@@ -100,10 +100,10 @@ class GeodatabaseApp(QWidget):
         best_table = process.extractOne(approx_table_name, tables)
 
         if not best_fc or best_fc[1] < 80:
-            QMessageBox.critical(self, "Error", f"No good match for feature class '{approx_fc_name}'")
+            QMessageBox.critical(self, "ERROR", f"No good match for feature class '{approx_fc_name}'")
             return
         if not best_table or best_table[1] < 80:
-            QMessageBox.critical(self, "Error", f"No good match for table '{approx_table_name}'")
+            QMessageBox.critical(self, "ERROR", f"No good match for table '{approx_table_name}'")
             return
 
         feature_class = os.path.join(gdb_path, best_fc[0])
@@ -127,9 +127,9 @@ class GeodatabaseApp(QWidget):
                 report_path = os.path.join(output_folder, "dry_run_report.txt")
                 with open(report_path, "w", encoding="utf-8") as rpt:
                     rpt.write(self.log.toPlainText())
-                self.log_message(f"📄 Dry run saved to: {report_path}")
+                self.log_message(f"📄 A dry run test was saved to: {report_path}")
             except Exception as e:
-                self.log_message(f"⚠️ Could not save dry run: {e}")
+                self.log_message(f"⚠️ Could not save the dry run: {e}")
 
             # Optionally open the folder (select file on Windows)
             try:
@@ -152,13 +152,14 @@ class GeodatabaseApp(QWidget):
         # Step 7: Allow overwriting
         arcpy.env.overwriteOutput = True
 
-        # Step 8: Add XY coordinates
+        # Step 8: Add X,Y coordinates
         try:
-            with arcpy.EnvManager(outputCoordinateSystem="GEOGCS['GCS_WGS_1984',DATUM['D_WGS_1984',SPHEROID['WGS_1984',6378137.0,298.257223563]],PRIMEM['Greenwich',0.0],UNIT['Degree',0.0174532925199433]]"):
+            with arcpy.EnvManager(
+                    outputCoordinateSystem="GEOGCS['GCS_WGS_1984',DATUM['D_WGS_1984',SPHEROID['WGS_1984',6378137.0,298.257223563]],PRIMEM['Greenwich',0.0],UNIT['Degree',0.0174532925199433]]"):
                 updated_features = arcpy.management.AddXY(feature_class)[0]
-            self.log_message("✅ XY coordinates added")
+            self.log_message("✅ X,Y coordinates successfully added")
         except Exception as e:
-            self.log_message(f"⚠️ Failed to add XY: {e}")
+            self.log_message(f"⚠️ Failed to add X,Y coordinates: {e}")
             self.close()
             return
 
@@ -206,13 +207,26 @@ class GeodatabaseApp(QWidget):
                             if s:
                                 date_str = s
             except Exception as e:
-                self.log_message(f"⚠️ Could not read Date_Fielded for TL {tl}: {e}")
+                self.log_message(f"⚠️ Could not read Date Fielded column for TL {tl}: {e}")
 
-            csv_output = os.path.join(output_folder, f"{safe_tl}_Fielding_{date_str}.csv")
+            excel_output = os.path.join(
+                output_folder,
+                f"{safe_tl}_FIBER_Field_Survey_{date_str}.xlsx"
+            )
 
-            arcpy.conversion.ExportTable(layer_name, csv_output)
-            self.log_message(f"✅ Exported table to: {csv_output}")
-            arcpy.management.Delete(layer_name)
+            try:
+                arcpy.conversion.TableToExcel(
+                    Input_Table=layer_name,
+                    Output_Excel_File=excel_output
+                )
+
+                self.log_message(f"✅ Exported Excel table to: {excel_output}")
+
+            except Exception as e:
+                self.log_message(f"⚠️ Failed to export Excel file for TL {tl}: {e}")
+
+            finally:
+                arcpy.management.Delete(layer_name)
 
         # Step 10: Join fields
         try:
@@ -229,14 +243,16 @@ class GeodatabaseApp(QWidget):
 
         # Step 11: Extract attachments
         try:
-            with arcpy.da.SearchCursor(attachment_table, ['DATA', 'ATT_NAME', 'ATTACHMENTID', 'Structure_Number', 'TL_Number']) as cursor:
+            with arcpy.da.SearchCursor(attachment_table,
+                                       ['DATA', 'ATT_NAME', 'ATTACHMENTID', 'Structure_Number', 'TL_Number']) as cursor:
                 for item in cursor:
                     attachment = item[0]
                     # Build structure and attachment name parts separately so we only pad numbers in the attachment filename
                     att_orig = str(item[1]) if item[1] else ""
                     struct_part = str(item[3]) if item[3] else ""
 
-                    # Pad single-digit trailing numbers in the attachment base name (1-9 -> 01-09)
+
+                    # Pad single-digit trailing numbers in the attachment (photo) base name (1-9 -> 01-09)
                     try:
                         base, ext = os.path.splitext(att_orig)
                         if base:
@@ -248,7 +264,7 @@ class GeodatabaseApp(QWidget):
                     except Exception:
                         att_part = att_orig
 
-                    # Combine structure number and attachment part (if present)
+                    # Combine pole number and attachment part (if present)
                     if struct_part and att_part:
                         att_name = f"{struct_part} {att_part}"
                     else:
@@ -257,7 +273,9 @@ class GeodatabaseApp(QWidget):
                     structure_num = struct_part if struct_part else "Unknown"
                     tl_number = str(item[4]) if item[4] else "Unknown"
 
-                    tl_folder = os.path.join(output_folder, f"{tl_number}")
+
+                    tl_folder = os.path.join(output_folder,
+                                             f"{tl_number}")  # here is where to change the folder name
                     os.makedirs(tl_folder, exist_ok=True)
 
                     structure_folder = os.path.join(tl_folder, structure_num)
@@ -287,6 +305,7 @@ class GeodatabaseApp(QWidget):
 
         self.log_message("✅ Process completed successfully")
         self.close()  # close window when finished
+
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
